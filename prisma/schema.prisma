@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  role               String   // "student" | "company" | "admin"
+  email              String   @unique
+  password           String
+  status             String   @default("active") // "active" | "suspended"
+  avatar             String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Student-specific fields
+  firstName          String?
+  lastName           String?
+  phone              String?
+  university         String?
+  major              String?
+  graduationYear     String?
+  skills             String?  // SQLite Workaround: Store as stringified JSON
+  resumeUrl          String?
+  resumeName         String?  // Added for file uploads
+  portfolioUrl       String?
+  githubUrl          String?
+
+  // Company-specific fields
+  companyName        String?
+  industry           String?
+  location           String?
+  website            String?
+  size               String?  
+  about              String?  
+  verificationStatus String?  @default("pending") // "pending" | "approved" | "rejected"
+  documents          String?  // SQLite Workaround: Store as stringified JSON
+  nif                String?  // Added for Admin validation
+  registreCommerce   String?  // Added for Admin validation
+
+  // Relations
+  jobs                 Job[]         @relation("CompanyJobs")
+  applications         Application[] @relation("StudentApplications")
+  ticketsReported      Ticket[]      @relation("ReporterTickets")
+  ticketsReportedParty Ticket[]      @relation("ReportedPartyTickets")
+}
+
+model Job {
+  id           String   @id @default(uuid())
+  companyId    String
+  role         String
+  company      String
+  location     String
+  type         String
+  duration     String?
+  description  String?
+  requirements String?
+  tags         String?  // SQLite Workaround: Store as stringified JSON
+  status       String   @default("Active")
+  deadline     String?
+  createdAt    DateTime @default(now()) // Renamed from 'posted'
+  logo         String?
+  logoColor    String?
+
+  // Relations
+  companyRef   User          @relation("CompanyJobs", fields: [companyId], references: [id], onDelete: Cascade)
+  applications Application[]
+}
+
+model Application {
+  id          String   @id @default(uuid())
+  studentId   String
+  jobId       String
+  status      String   @default("Pending")
+  dateApplied DateTime @default(now())
+  matchScore  Int?
+
+  // Relations
+  student     User @relation("StudentApplications", fields: [studentId], references: [id], onDelete: Cascade)
+  job         Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+}
+
+model Ticket {
+  id              String    @id @default(uuid())
+  type            String
+  status          String    @default("open")
+  dateOpened      DateTime  @default(now())
+  resolvedAt      DateTime? // Added for Admin resolution
+  reporterId      String
+  reportedPartyId String?
+  subject         String
+  description     String
+
+  // Relations
+  reporter      User  @relation("ReporterTickets", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedParty User? @relation("ReportedPartyTickets", fields: [reportedPartyId], references: [id], onDelete: SetNull)
+}
