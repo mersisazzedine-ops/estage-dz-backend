@@ -1,190 +1,192 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyStudent, verifyCompany } = require('../middleware/auth');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// --- 1. STUDENT: GET MY APPLICATIONS ---
-router.get('/mine', verifyToken, async (req, res) => {
-    try {
-        if (req.user.role !== 'student') {
-            return res.status(403).json({ success: false, message: 'Forbidden' });
-        }
+// ─── Helper: safe student (no password) ──────────────────────────────────────
+const safeUser = (user) => {
+  if (!user) return null;
+  const { password, ...safe } = user;
+  return safe;
+};
 
-        const applications = await prisma.application.findMany({
-            where: { studentId: req.user.id },
-            include: { job: true }, // Join the job data
-            orderBy: { dateApplied: 'desc' }
-        });
+// ─── Helper: parse JSON string safely ────────────────────────────────────────
+const parseJSON = (str, fallback = []) => {
+  if (!str) return fallback;
+  if (Array.isArray(str)) return str;
+  try { return JSON.parse(str); } catch { return fallback; }
+};
 
-        // Format exactly as the PDF requested
-        const formattedData = applications.map(app => ({
-            id: app.id,
-            jobId: app.jobId,
-            status: app.status,
-            dateApplied: app.dateApplied,
-            matchScore: app.matchScore,
-            role: app.job.role,
-            company: app.job.company,
-            location: app.job.location,
-            type: app.job.type,
-            logo: app.job.logo,
-            logoColor: app.job.logoColor
-        }));
+const serializeJob = (job) => {
+  if (!job) return null;
+  return { ...job, tags: parseJSON(job.tags) };
+};
 
-        res.status(200).json({ success: true, data: formattedData });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: 'Server error fetching applications' });
-    }
+// ─── GET /api/applications/mine  (Student – list own applications) ────────────
+router.get('/mine', verifyStudent, async (req, res) => {
+  try {
+    const applications = await prisma.application.findMany({
+      where: { studentId: req.user.id },
+      include: { job: true },
+      orderBy: { dateApplied: 'desc' },
+    });
+
+    const result = applications.map((app) => ({
+      ...app,
+      job: app.job ? serializeJob(app.job) : null,
+    }));
+
+    res.status(200).json({ success: true, data: { applications: result } });
+  } catch (error) {
+    console.error('[GET /applications/mine]', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
 });
 
-// --- 2. STUDENT: APPLY TO A JOB ---
-router.post('/:jobId', verifyToken, async (req, res) => {
-    try {
-        if (req.user.role !== 'student') {
-            return res.status(403).json({ success: false, message: 'Only students can apply' });
-        }
+// ─── GET /api/applications/company  (Company – all applicants for their jobs) ──
+router.get('/company', verifyCompany, async (req, res) => {
+  try {
+    const applications = await prisma.application.findMany({
+      where: {
+        job: { companyId: req.user.id },
+      },
+      include: {
+        job: true,
+        student: true,
+      },
+      orderBy: { dateApplied: 'desc' },
+    });
 
-        const { jobId } = req.params;
+    const result = applications.map((app) => ({
+      ...app,
+      student: safeUser(app.student),
+      job: app.job ? serializeJob(app.job) : null,
+    }));
 
-        // 1. Check if job exists and is active
-        const job = await prisma.job.findUnique({ where: { id: jobId } }); // Note: DB table is often 'internship' but we map it logically. Assuming Prisma schema uses 'job' or 'internship'. We use 'internship' if that's what's in your schema.
-        if (!job) {
-            return res.status(404).json({ success: false, message: 'Job not found or no longer accepting applications.' });
-        }
-
-        // 2. Check for duplicate application
-        const existingApp = await prisma.application.findFirst({
-            where: { studentId: req.user.id, jobId: jobId }
-        });
-
-        if (existingApp) {
-            return res.status(409).json({ success: false, message: 'You have already applied for this position.' });
-        }
-
-        // 3. Create Application (matchScore can be a random mock value for now like 85)
-        const newApp = await prisma.application.create({
-            data: {
-                studentId: req.user.id,
-                jobId: jobId,
-                status: 'Pending',
-                matchScore: Math.floor(Math.random() * (100 - 60 + 1) + 60), // Random 60-100
-            }
-        });
-
-        res.status(201).json({ success: true, data: newApp });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: 'Server error creating application' });
-    }
+    res.status(200).json({ success: true, data: { applications: result } });
+  } catch (error) {
+    console.error('[GET /applications/company]', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
 });
 
-// --- 3. STUDENT: CANCEL APPLICATION ---
-router.delete('/cancel/:jobId', verifyToken, async (req, res) => {
-    try {
-        if (req.user.role !== 'student') {
-            return res.status(403).json({ success: false, message: 'Forbidden' });
-        }
+// ─── POST /api/applications/apply/:jobId  (Student – apply to a job) ──────────
+router.post('/apply/:jobId', verifyStudent, async (req, res) => {
+  try {
+    const { jobId } = req.params;
 
-        const appToDelete = await prisma.application.findFirst({
-            where: { studentId: req.user.id, jobId: req.params.jobId }
-        });
-
-        if (!appToDelete) {
-            return res.status(404).json({ success: false, message: 'Application not found.' });
-        }
-
-        await prisma.application.delete({ where: { id: appToDelete.id } });
-        res.status(200).json({ success: true, message: 'Application withdrawn successfully.' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: 'Server error cancelling application' });
+    const job = await prisma.job.findUnique({ where: { id: jobId } });
+    if (!job) return res.status(404).json({ success: false, message: 'Job not found.' });
+    if (job.status !== 'Active') {
+      return res.status(400).json({ success: false, message: 'This job is not accepting applications.' });
     }
+
+    // Check for duplicate application
+    const existing = await prisma.application.findUnique({
+      where: { studentId_jobId: { studentId: req.user.id, jobId } },
+    });
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'You have already applied to this job.' });
+    }
+
+    const application = await prisma.application.create({
+      data: {
+        studentId: req.user.id,
+        jobId,
+        status: 'Pending',
+        matchScore: req.body.matchScore || null,
+      },
+      include: { job: true },
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        application: {
+          ...application,
+          job: application.job ? serializeJob(application.job) : null,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('[POST /applications/apply/:jobId]', error);
+    if (error.code === 'P2002') {
+      return res.status(409).json({ success: false, message: 'You have already applied to this job.' });
+    }
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
 });
 
-// --- 4. COMPANY: GET ALL APPLICANTS ---
-router.get('/company', verifyToken, async (req, res) => {
-    try {
-        if (req.user.role !== 'company') {
-            return res.status(403).json({ success: false, message: 'Forbidden' });
-        }
+// ─── DELETE /api/applications/cancel/:jobId  (Student – withdraw application) ──
+router.delete('/cancel/:jobId', verifyStudent, async (req, res) => {
+  try {
+    const { jobId } = req.params;
 
-        // Find all applications where the connected Job's companyId matches req.user.id
-        const applications = await prisma.application.findMany({
-            where: {
-                job: { companyId: req.user.id }
-            },
-            include: {
-                job: true,
-                student: true
-            },
-            orderBy: { dateApplied: 'desc' }
-        });
-
-        // Format exactly as the PDF requested
-        const formattedData = applications.map(app => ({
-            id: app.id,
-            jobId: app.jobId,
-            jobTitle: app.job.role,
-            status: app.status,
-            dateApplied: app.dateApplied,
-            matchScore: app.matchScore,
-            student: {
-                id: app.student.id,
-                firstName: app.student.firstName,
-                lastName: app.student.lastName,
-                email: app.student.email,
-                avatar: app.student.avatar,
-                university: app.student.university,
-                major: app.student.major,
-                skills: app.student.skills ? JSON.parse(app.student.skills) : [],
-                resumeUrl: app.student.resumeUrl
-            }
-        }));
-
-        res.status(200).json({ success: true, data: formattedData });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: 'Server error fetching applicants' });
+    const application = await prisma.application.findUnique({
+      where: { studentId_jobId: { studentId: req.user.id, jobId } },
+    });
+    if (!application) {
+      return res.status(404).json({ success: false, message: 'Application not found.' });
     }
+
+    await prisma.application.delete({
+      where: { studentId_jobId: { studentId: req.user.id, jobId } },
+    });
+
+    res.status(200).json({ success: true, message: 'Application withdrawn successfully.' });
+  } catch (error) {
+    console.error('[DELETE /applications/cancel/:jobId]', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
 });
 
-// --- 5. COMPANY: UPDATE APPLICATION STATUS ---
-router.patch('/:id/status', verifyToken, async (req, res) => {
-    try {
-        if (req.user.role !== 'company') {
-            return res.status(403).json({ success: false, message: 'Forbidden' });
-        }
+// ─── PATCH /api/applications/:applicationId/status  (Company – update status) ──
+router.patch('/:applicationId/status', verifyCompany, async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    const { status } = req.body;
 
-        const { status } = req.body;
-        const applicationId = req.params.id;
-
-        // Verify the company actually owns the job this application is tied to
-        const application = await prisma.application.findUnique({
-            where: { id: applicationId },
-            include: { job: true }
-        });
-
-        if (!application) {
-            return res.status(404).json({ success: false, message: 'Application not found.' });
-        }
-
-        if (application.job.companyId !== req.user.id) {
-            return res.status(403).json({ success: false, message: 'You do not have permission to update this application.' });
-        }
-
-        const updatedApp = await prisma.application.update({
-            where: { id: applicationId },
-            data: { status }
-        });
-
-        res.status(200).json({ success: true, data: { id: updatedApp.id, status: updatedApp.status } });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: 'Server error updating status' });
+    const validStatuses = ['Pending', 'Under Review', 'Interview', 'Accepted', 'Rejected'];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Status must be one of: ${validStatuses.join(', ')}.`,
+      });
     }
+
+    const application = await prisma.application.findUnique({
+      where: { id: applicationId },
+      include: { job: true },
+    });
+    if (!application) {
+      return res.status(404).json({ success: false, message: 'Application not found.' });
+    }
+    if (application.job.companyId !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+
+    const updated = await prisma.application.update({
+      where: { id: applicationId },
+      data: { status },
+      include: { job: true, student: true },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        application: {
+          ...updated,
+          student: safeUser(updated.student),
+          job: updated.job ? serializeJob(updated.job) : null,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('[PATCH /applications/:applicationId/status]', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
 });
 
 module.exports = router;

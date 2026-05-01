@@ -24,9 +24,9 @@ model User {
   university         String?
   major              String?
   graduationYear     String?
-  skills             String?  // SQLite Workaround: Store as stringified JSON
+  skills             String?  // Stored as stringified JSON array
   resumeUrl          String?
-  resumeName         String?  // Added for file uploads
+  resumeName         String?
   portfolioUrl       String?
   githubUrl          String?
 
@@ -35,12 +35,11 @@ model User {
   industry           String?
   location           String?
   website            String?
-  size               String?  
-  about              String?  
+  size               String?
+  about              String?
   verificationStatus String?  @default("pending") // "pending" | "approved" | "rejected"
-  documents          String?  // SQLite Workaround: Store as stringified JSON
-  nif                String?  // Added for Admin validation
-  registreCommerce   String?  // Added for Admin validation
+  nif                String?
+  registreCommerce   String?
 
   // Relations
   jobs                 Job[]         @relation("CompanyJobs")
@@ -59,12 +58,12 @@ model Job {
   duration     String?
   description  String?
   requirements String?
-  tags         String?  // SQLite Workaround: Store as stringified JSON
-  status       String   @default("Active")
+  tags         String?  // Stored as stringified JSON array
+  status       String   @default("Active") // "Active" | "Closed" | "Draft" | "Blocked"
   deadline     String?
-  createdAt    DateTime @default(now()) // Renamed from 'posted'
   logo         String?
   logoColor    String?
+  createdAt    DateTime @default(now())
 
   // Relations
   companyRef   User          @relation("CompanyJobs", fields: [companyId], references: [id], onDelete: Cascade)
@@ -75,25 +74,27 @@ model Application {
   id          String   @id @default(uuid())
   studentId   String
   jobId       String
-  status      String   @default("Pending")
+  status      String   @default("Pending") // "Pending" | "Under Review" | "Interview" | "Accepted" | "Rejected"
   dateApplied DateTime @default(now())
   matchScore  Int?
 
   // Relations
   student     User @relation("StudentApplications", fields: [studentId], references: [id], onDelete: Cascade)
   job         Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, jobId])
 }
 
 model Ticket {
   id              String    @id @default(uuid())
-  type            String
-  status          String    @default("open")
-  dateOpened      DateTime  @default(now())
-  resolvedAt      DateTime? // Added for Admin resolution
-  reporterId      String
-  reportedPartyId String?
+  type            String    // "conflict" | "support" | "bug"
+  status          String    @default("open") // "open" | "resolved" | "closed"
   subject         String
   description     String
+  reporterId      String
+  reportedPartyId String?
+  dateOpened      DateTime  @default(now())
+  resolvedAt      DateTime?
 
   // Relations
   reporter      User  @relation("ReporterTickets", fields: [reporterId], references: [id], onDelete: Cascade)

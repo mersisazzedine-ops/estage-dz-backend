@@ -1,75 +1,76 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+const path = require('path');
 
 const app = express();
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
 
-// --- 1. MIDDLEWARE ---
-app.use(cors()); // Allows the React frontend to communicate with the server
-app.use(express.json()); // Allows the server to read incoming JSON data
-app.use(express.urlencoded({ extended: true })); // For parsing form data
+// ─── 1. CORS ───────────────────────────────────────────────────────────────────
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
-// Allows the frontend to view uploaded files (avatars, resumes)
-app.use('/uploads', express.static('uploads')); 
+// ─── 2. BODY PARSERS ──────────────────────────────────────────────────────────
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// --- 2. IMPORT ROUTES ---
-const authRoutes = require('./routes/authRoutes');
-const internshipRoutes = require('./routes/internshipRoutes'); // Mapped to /api/jobs
+// ─── 3. STATIC FILES (uploaded avatars & resumes) ────────────────────────────
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ─── 4. ROUTES ────────────────────────────────────────────────────────────────
+const authRoutes        = require('./routes/authRoutes');
+const userRoutes        = require('./routes/userRoutes');
+const internshipRoutes  = require('./routes/internshipRoutes'); // /api/jobs
 const applicationRoutes = require('./routes/applicationRoutes');
-const userRoutes = require('./routes/userRoutes');
-const dashboardRoutes = require('./routes/dashboardRoutes'); // New!
-const adminRoutes = require('./routes/adminRoutes');         // Uncommented!
-const ticketRoutes = require('./routes/ticketRoutes');       // Uncommented!
+const dashboardRoutes   = require('./routes/dashboardRoutes');
+const adminRoutes       = require('./routes/adminRoutes');
+const ticketRoutes      = require('./routes/ticketRoutes');
 
-// --- 3. USE ROUTES ---
-app.use('/api/auth', authRoutes);
-app.use('/api/jobs', internshipRoutes);
+app.use('/api/auth',         authRoutes);
+app.use('/api/users',        userRoutes);
+app.use('/api/jobs',         internshipRoutes);
 app.use('/api/applications', applicationRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/dashboard', dashboardRoutes); // New!
-app.use('/api/admin', adminRoutes);         // Uncommented!
-app.use('/api/tickets', ticketRoutes);      // Uncommented!
+app.use('/api/dashboard',    dashboardRoutes);
+app.use('/api/admin',        adminRoutes);
+app.use('/api/tickets',      ticketRoutes);
 
-// Trick to map the standalone /api/contact directly into our ticket routes contact logic
+// ─── 5. CONTACT ENDPOINT (maps /api/contact → ticket router's /contact) ───────
 app.use('/api/contact', (req, res, next) => {
-    req.url = '/contact'; 
-    ticketRoutes(req, res, next);
+  req.url = '/contact';
+  ticketRoutes(req, res, next);
 });
 
-// --- 4. DEBUG & TEST ROUTES ---
-// Temporary route to approve all companies for testing
-app.get('/approve-all', async (req, res) => {
-    try {
-        await prisma.user.updateMany({
-            where: { role: 'company' },
-            data: { verificationStatus: 'approved' }
-        });
-        res.send("<h1>✅ ALL COMPANIES APPROVED! You can now log in.</h1>");
-    } catch (error) {
-        res.status(500).send("Error: " + error.message);
-    }
+// ─── 6. HEALTH CHECK ──────────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+    message: '🚀 E-Stage DZ API is running.',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  });
 });
 
-// Temporary route to view all users in the DB
-app.get('/debug-users', async (req, res) => {
-    try {
-        const users = await prisma.user.findMany();
-        res.json({ total: users.length, users: users });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+// ─── 7. GLOBAL ERROR HANDLER ──────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error('[Global Error]', err);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'An unexpected server error occurred.',
+  });
 });
 
-// Simple API health check
-app.get('/api/test', (req, res) => {
-    res.json({ message: 'Welcome to the E-Stage DZ Backend!' });
+// ─── 8. 404 CATCH-ALL ─────────────────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: `Route ${req.method} ${req.url} not found.` });
 });
 
-// --- 5. START SERVER ---
+// ─── 9. START ─────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`🚀 Server is running on port ${PORT}`);
-    console.log(`🌐 API available at http://localhost:${PORT}/api/test`);
+  console.log(`\n🚀  E-Stage DZ Backend running on http://localhost:${PORT}`);
+  console.log(`📡  Health check: http://localhost:${PORT}/api/health`);
+  console.log(`🌐  CORS allowed for: ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
 });
